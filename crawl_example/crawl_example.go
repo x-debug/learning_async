@@ -8,13 +8,17 @@ import (
 
 func main() {
 	worklist := make(chan []string)
+	var n int
 
+	n++
 	go func() { worklist <- []string{"https://www.baidu.com", "https://chenxf.org/"} }()
 
 	seen := make(map[string]bool)
-	for list := range worklist {
+	for ; n > 0; n-- {
+		list := <-worklist
 		for _, link := range list {
 			if !seen[link] {
+				n++
 				seen[link] = true
 				go func(link string) {
 					worklist <- crawl(link)
@@ -24,7 +28,7 @@ func main() {
 	}
 }
 
-var  tokens = make(chan struct{}, 20)
+var tokens = make(chan struct{}, 20)
 
 func crawl(url string) []string {
 	fmt.Println(url)
