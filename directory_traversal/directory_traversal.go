@@ -5,23 +5,42 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 )
 
 func main() {
-	roots := []string{"."}
+	roots := []string{"/"}
 	fileSizes := make(chan int64)
+	var n sync.WaitGroup
+
+	for _, root := range roots {
+		n.Add(1)
+		go walkDir(root, &n, fileSizes)
+	}
+
 	go func() {
-		for _, root := range roots {
-			walkDir(root, fileSizes)
-		}
+		n.Wait()
 		close(fileSizes) //don't forget close it
 	}()
 
 	var nfiles, nbytes int64
-	for size := range fileSizes {
-		nfiles++
-		nbytes += size
+	tick := time.Tick(500 * time.Millisecond)
+
+loop:
+	for {
+		select {
+		case size, ok := <-fileSizes:
+			if !ok {
+				break loop
+			}
+			nfiles++
+			nbytes += size
+		case <-tick:
+			printDiskUsage(nfiles, nbytes)
+		}
 	}
+
 	printDiskUsage(nfiles, nbytes)
 }
 
@@ -29,11 +48,13 @@ func printDiskUsage(nfiles, nbytes int64) {
 	fmt.Printf("%d files, %.1f GB\n", nfiles, float64(nbytes)/1e9)
 }
 
-func walkDir(dir string, fileSizes chan<- int64) {
+func walkDir(dir string, w *sync.WaitGroup, fileSizes chan<- int64) {
+	defer w.Done()
 	for _, entry := range dirents(dir) {
 		if entry.IsDir() {
+			w.Add(1)
 			subDir := filepath.Join(dir, entry.Name())
-			walkDir(subDir, fileSizes)
+			go walkDir(subDir, w, fileSizes)
 		} else {
 			fileSizes <- entry.Size()
 		}
