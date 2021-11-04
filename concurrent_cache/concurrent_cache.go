@@ -32,27 +32,35 @@ type result struct {
 	err   error
 }
 
+type entry struct {
+	res   result
+	ready chan struct{}
+}
+
 type Memo struct {
 	f     Func
-	cache map[string]result
+	cache map[string]*entry
 	mu    sync.Mutex
 }
 
 func New(f Func) *Memo {
-	return &Memo{f: f, cache: make(map[string]result)}
+	return &Memo{f: f, cache: make(map[string]*entry)}
 }
 
 func (memo *Memo) Get(key string) (interface{}, error) {
 	memo.mu.Lock()
-	res, ok := memo.cache[key]
-	memo.mu.Unlock()
-	if !ok {
-		res.value, res.err = memo.f(key)
-		memo.mu.Lock()
-		memo.cache[key] = res
+	e := memo.cache[key]
+	if e == nil {
+		e = &entry{ready: make(chan struct{})}
+		memo.cache[key] = e
 		memo.mu.Unlock()
+		e.res.value, e.res.err = memo.f(key)
+		close(e.ready)
+	} else {
+		memo.mu.Unlock()
+		<-e.ready
 	}
-	return res.value, res.err
+	return e.res.value, e.res.err
 }
 
 func httpGetBody(url string) (interface{}, error) {
