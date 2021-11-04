@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -37,30 +36,50 @@ type entry struct {
 	ready chan struct{}
 }
 
+type request struct {
+	key      string
+	response chan<- result
+}
+
 type Memo struct {
-	f     Func
-	cache map[string]*entry
-	mu    sync.Mutex
+	f        Func
+	requests chan request
 }
 
 func New(f Func) *Memo {
-	return &Memo{f: f, cache: make(map[string]*entry)}
+	memo := &Memo{f: f, requests: make(chan request)}
+	go memo.server(f)
+	return memo
+}
+
+func (memo *Memo) server(f Func) {
+	cache := make(map[string]*entry)
+	for req := range memo.requests {
+		e := cache[req.key]
+		if e == nil {
+			e = &entry{ready: make(chan struct{})}
+			cache[req.key] = e
+			go e.call(f, req.key)
+		}
+		go e.delivery(req.response)
+	}
+}
+
+func (e *entry) call(f Func, key string) {
+	e.res.value, e.res.err = f(key)
+	close(e.ready)
+}
+
+func (e *entry) delivery(response chan<- result) {
+	<-e.ready
+	response <- e.res
 }
 
 func (memo *Memo) Get(key string) (interface{}, error) {
-	memo.mu.Lock()
-	e := memo.cache[key]
-	if e == nil {
-		e = &entry{ready: make(chan struct{})}
-		memo.cache[key] = e
-		memo.mu.Unlock()
-		e.res.value, e.res.err = memo.f(key)
-		close(e.ready)
-	} else {
-		memo.mu.Unlock()
-		<-e.ready
-	}
-	return e.res.value, e.res.err
+	response := make(chan result)
+	memo.requests <- request{key: key, response: response}
+	res := <-response
+	return res.value, res.err
 }
 
 func httpGetBody(url string) (interface{}, error) {
